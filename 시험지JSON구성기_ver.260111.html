@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>시험지 JSON 구성기 ver. 260111</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- JSZip (ZIP 입력 지원) -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
+
+  <!-- KaTeX -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+
+  <style>
+    .question-card { transition: all 0.2s ease-in-out; }
+    .question-card:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0,0,0,0.08); }
+    .selected { background-color: #e0f2fe !important; border-color: #38bdf8; }
+    .chip { display:inline-block; padding:2px 8px; border-radius:999px; background:#eef2ff; color:#3730a3; font-size:12px; margin:2px 6px 0 0; border:1px solid #c7d2fe;}
+    .btn-primary { background:#38bdf8; color:white; padding:6px 12px; border-radius:6px; font-size:0.85rem; transition:0.2s; }
+    .btn-primary:hover { background:#0ea5e9; }
+    .btn-secondary { background:#e2e8f0; color:#334155; padding:4px 10px; border-radius:6px; font-size:0.8rem; }
+    .btn-secondary:hover { background:#cbd5e1; }
+    .btn-danger { background:#fca5a5; color:#7f1d1d; padding:4px 10px; border-radius:6px; font-size:0.8rem; }
+    .btn-danger:hover { background:#ef4444; color:white; }
+    .btn-bar { padding:6px 12px; font-size:0.85rem; line-height:1.2; display:inline-flex; align-items:center; justify-content:center; }
+
+    details > summary::-webkit-details-marker { display: none; }
+    details > summary::marker { content: ""; }
+    details[open] .chev { transform: rotate(90deg); }
+
+    .thumb { max-height: 220px; object-fit: contain; }
+    .ctrl { border: 1px solid #e2e8f0; border-radius: 6px; padding: 2px 8px; font-size: 12px; background: #fff; }
+      .btn-disabled, button:disabled { opacity:0.45; cursor:not-allowed; }
+  </style>
+</head>
+<body class="bg-gray-50 flex flex-col min-h-screen">
+
+  <div class="bg-white shadow-sm px-4 py-3 flex items-center justify-between sticky top-0 z-10">
+    <div class="flex items-center gap-3">
+      <span class="text-sm font-semibold text-slate-700">시험지 JSON 구성기 ver. 260111</span>
+      <input
+        type="file"
+        id="mixed-upload"
+        accept=".json,.zip,.png,.jpg,.jpeg,application/zip,application/x-zip-compressed,image/png,image/jpeg"
+        multiple
+        class="block text-sm text-gray-600 file:mr-4 file:py-1 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-sky-100 file:text-sky-700 hover:file:bg-sky-200"
+        title="문제 JSON과 이미지 파일을 선택하세요."
+      />
+      <label class="flex items-center gap-2 text-xs text-gray-700">
+        <input id="toggle-accum" type="checkbox" checked class="accent-sky-600">
+        업로드 시 누적
+      </label>
+      <button id="btn-save-exam" class="btn-primary ml-2 btn-bar" title="현재 구성된 시험지를 JSON으로 저장합니다.">JSON 저장</button>
+      <button id="btn-save-exam-zip" class="btn-secondary ml-2 btn-bar" title="현재 구성된 시험지를 (JSON + 포함된 이미지) ZIP으로 저장합니다.">시험지 저장</button>
+    </div>
+    <span id="status-bar" class="text-sm text-gray-600">상태: 준비</span>
+  </div>
+
+  <div class="flex flex-1 overflow-hidden">
+    <!-- 문제은행 (1/2) -->
+    <div class="w-1/2 border-r overflow-y-auto p-4 bg-white">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold text-sky-700">문제은행</h2>
+        <div id="bank-stats" class="text-xs text-gray-600">문항: 0개 · 이미지: 0개</div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 mb-3">
+        <input id="search-box" type="text" placeholder="검색어(제목/지문/정답) 입력..."
+               class="flex-1 border rounded-md px-2 py-1 text-sm focus:ring-2 focus:ring-sky-400">
+        <div class="flex items-center gap-1">
+          <select id="bank-sort-key" class="ctrl">
+            <option value="title">제목</option>
+            <option value="id">id</option>
+            <option value="imageCount">이미지수</option>
+          </select>
+          <select id="bank-sort-order" class="ctrl">
+            <option value="asc">오름차순</option>
+            <option value="desc">내림차순</option>
+          </select>
+        </div>
+        <button id="btn-select-all" class="btn-secondary">모두 선택</button>
+        <button id="btn-deselect-all" class="btn-secondary">선택 해제</button>
+        <button id="btn-add-to-exam" class="btn-primary">선택 추가 →</button>
+      </div>
+
+      <div id="question-bank-list" class="space-y-2"></div>
+    </div>
+
+    <!-- 시험지 (1/2) -->
+    <div class="w-1/2 p-4 bg-gray-50 overflow-y-auto">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold text-sky-700">시험지 구성</h2>
+        <div class="flex items-center gap-2">
+          <div class="text-sm text-slate-600" id="exam-stats">문항: 0개 · 이미지: 0개 · 합계: 0점</div>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 mb-3">
+        <div class="flex items-center gap-1">
+          <select id="exam-sort-key" class="ctrl">
+            <option value="title">제목</option>
+            <option value="id">id</option>
+            <option value="points">배점</option>
+            <option value="imageCount">이미지수</option>
+          </select>
+          <select id="exam-sort-order" class="ctrl">
+            <option value="asc">오름차순</option>
+            <option value="desc">내림차순</option>
+          </select>
+        </div>
+        <button id="btn-apply-exam-sort" class="btn-secondary">정렬 적용</button>
+      </div>
+
+      <div id="exam-paper-list" class="space-y-2"></div>
+    </div>
+  </div>
+
+  <script>
+    const KATEX_OPTIONS = {
+      delimiters: [
+        {left: "$$", right: "$$", display: true},
+        {left: "\\[", right: "\\]", display: true},
+        {left: "\\(", right: "\\)", display: false},
+        {left: "$", right: "$", display: false}
+      ],
+      throwOnError: false
+    };
+
+    document.addEventListener('DOMContentLoaded', () => {
+      let questionBank = [];
+      let examPaper = [];
+      const imageMap = new Map(); // id -> string[] URLs
+      const imageURLMeta = new Map(); // objectURL -> { name, blob }
+
+      function revokeAllImageURLs() {
+        try {
+          for (const arr of imageMap.values()) {
+            if (Array.isArray(arr)) arr.forEach(u => { try { URL.revokeObjectURL(u); } catch(e){} });
+          }
+        } catch (e) {}
+      }
+
+
+      const fileInput = document.getElementById('mixed-upload');
+      const bankList = document.getElementById('question-bank-list');
+      const examList = document.getElementById('exam-paper-list');
+      const statusBar = document.getElementById('status-bar');
+      const statsEl = document.getElementById('exam-stats');
+      const bankStatsEl = document.getElementById('bank-stats');
+      const toggleAccum = document.getElementById('toggle-accum');
+
+      const bankSortKeyEl = document.getElementById('bank-sort-key');
+      const bankSortOrderEl = document.getElementById('bank-sort-order');
+      const examSortKeyEl = document.getElementById('exam-sort-key');
+      const examSortOrderEl = document.getElementById('exam-sort-order');
+      const btnApplyExamSort = document.getElementById('btn-apply-exam-sort');
+
+      fileInput.addEventListener('change', handleMixedUpload);
+      document.getElementById('search-box').addEventListener('input', renderBank);
+      bankSortKeyEl.addEventListener('change', renderBank);
+      bankSortOrderEl.addEventListener('change', renderBank);
+
+      document.getElementById('btn-select-all').addEventListener('click', () =>
+        bankList.querySelectorAll('.question-card').forEach(i => i.classList.add('selected'))
+      );
+      document.getElementById('btn-deselect-all').addEventListener('click', () =>
+        bankList.querySelectorAll('.question-card').forEach(i => i.classList.remove('selected'))
+      );
+      document.getElementById('btn-add-to-exam').addEventListener('click', addToExam);
+
+      document.getElementById('btn-save-exam').addEventListener('click', () => {
+        if (!examPaper.length) {
+          console.warn('저장 실패: examPaper 비어 있음');
+          return alert('저장할 시험지 구성이 없습니다.');
+        }
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        downloadJSON({ questions: examPaper }, `exam_paper_${ts}.json`);
+      });
+
+      document.getElementById('btn-save-exam-zip').addEventListener('click', downloadExamZip);
+
+      updateSaveButtons();
+
+
+
+      btnApplyExamSort.addEventListener('click', () => {
+        sortQuestionArray(examPaper, examSortKeyEl.value, examSortOrderEl.value);
+        renderExam();
+      });
+
+      async function handleMixedUpload(e) {
+        const files = e.target.files;
+        if (!files.length) return;
+
+        const doAccum = toggleAccum.checked !== false;
+
+        if (!doAccum) {
+          questionBank = [];
+          revokeAllImageURLs();
+          imageMap.clear();
+          imageURLMeta.clear();
+        }
+
+        let jsonCount = 0;
+        let imgCount = 0;
+        let questionsLoaded = 0;
+
+
+        
+        // ===== ZIP 지원: .zip 업로드 시 내부의 JSON/이미지를 자동 로드 =====
+        const zipFiles = [...files].filter(f => f.name.toLowerCase().endsWith('.zip'));
+        if (zipFiles.length > 0) {
+          if (typeof JSZip === 'undefined') {
+            updateStatus('오류: JSZip 로드 실패 (인터넷 연결 또는 CDN 차단 확인)');
+            alert('ZIP 처리를 위한 JSZip 라이브러리를 불러오지 못했습니다. (CDN 차단/오프라인 상태일 수 있음)');
+          } else {
+            for (const zf of zipFiles) {
+              try {
+                const zip = await JSZip.loadAsync(zf);
+                // ZIP 내부 파일을 순회하며 JSON/이미지 추출
+                const entries = Object.values(zip.files || {});
+                const jsonEntries = entries.filter(en => !en.dir && en.name.toLowerCase().endsWith('.json'));
+                const imgEntries = entries.filter(en => !en.dir && /\.(png|jpe?g)$/i.test(en.name));
+                
+                // JSON 로드
+                const jsonTexts = await Promise.all(jsonEntries.map(en => en.async('string')));
+                jsonTexts.forEach((t, idx) => {
+                  try {
+                    const data = JSON.parse(t);
+                    if (Array.isArray(data?.questions)) {
+                      questionBank.push(...data.questions);
+                      questionsLoaded += data.questions.length;
+                    } else if (Array.isArray(data)) {
+                      questionBank.push(...data);
+                      questionsLoaded += data.length;
+                    } else {
+                      console.warn('인식 불가 JSON 구조 (zip entry idx=', idx, '):', data);
+                    }
+                    jsonCount += 1;
+                  } catch (parseErr) {
+                    console.error('ZIP JSON 파싱 오류:', parseErr);
+                  }
+                });
+
+                // 이미지 로드 (Blob -> ObjectURL)
+                const imgBlobs = await Promise.all(imgEntries.map(en => en.async('blob')));
+                imgBlobs.forEach((blob, idx) => {
+                  const name = (imgEntries[idx].name || '').split('/').pop(); // 경로 제거
+                  const base = (name || '').replace(/\.[^.]+$/, '');
+                  const key = base.toLowerCase();
+                  try {
+                    const url = URL.createObjectURL(blob);
+                    if (!imageMap.has(key)) imageMap.set(key, []);
+                    imageMap.get(key).push(url);
+                    // ZIP 출력(이미지 포함)을 위해 원본 Blob/파일명 보관
+                    imageURLMeta.set(url, { name: (name || `image_${key}`), blob });
+                    imgCount += 1;
+                  } catch (e2) {
+                    console.warn('ZIP 이미지 로드 실패:', name, e2);
+                  }
+                });
+
+              } catch (zipErr) {
+                console.error('ZIP 처리 오류:', zipErr);
+                updateStatus('오류: ZIP 파일을 읽을 수 없습니다.');
+              }
+            }
+          }
+        }
+        const jsonFiles = [...files].filter(f => f.name.toLowerCase().endsWith('.json'));
+        const imgFiles = [...files].filter(f => /\.(png|jpg|jpeg)$/i.test(f.name));
+
+        try {
+          const contents = await Promise.all(jsonFiles.map(f => f.text()));
+          contents.forEach((t, idx) => {
+            try {
+              const data = JSON.parse(t);
+              if (Array.isArray(data?.questions)) {
+                questionBank.push(...data.questions);
+                questionsLoaded += data.questions.length;
+              } else if (Array.isArray(data)) {
+                questionBank.push(...data);
+                questionsLoaded += data.length;
+              } else {
+                console.warn('인식 불가 JSON 구조 (idx=', idx, '):', data);
+              }
+              jsonCount += 1;
+            } catch (parseErr) {
+              console.error('JSON 파싱 오류:', parseErr);
+            }
+          });
+        } catch (err) {
+          console.error(err);
+          updateStatus('오류: JSON 파일을 읽을 수 없습니다.');
+        }
+
+        imgFiles.forEach(f => {
+          const base = (f.name || '').replace(/\.[^.]+$/, '');
+          const key = base.toLowerCase();
+          try {
+            const url = URL.createObjectURL(f);
+            if (!imageMap.has(key)) imageMap.set(key, []);
+            imageMap.get(key).push(url);
+            // ZIP 출력(이미지 포함)을 위해 원본 Blob/파일명 보관
+            imageURLMeta.set(url, { name: (f.name || `image_${key}`), blob: f });
+            imgCount += 1;
+          } catch (e2) {
+            console.warn('이미지 로드 실패:', f.name, e2);
+          }
+        });
+
+        updateStatus(`${jsonCount}개 JSON, ${imgCount}개 이미지 로드 · 총 ${questionsLoaded}문항 ${doAccum ? '(누적)' : '(초기화 후 로드)'}`);
+        renderBank();
+        renderExam();
+      }
+
+      function getImagesForQuestion(q) {
+        if (q && typeof q.image === 'string') {
+          const k1 = q.image.replace(/\.[^.]+$/, '').toLowerCase();
+          if (imageMap.has(k1)) return imageMap.get(k1);
+        }
+        if (q && q.id != null) {
+          const k2 = String(q.id).toLowerCase();
+          if (imageMap.has(k2)) return imageMap.get(k2);
+        }
+        return [];
+      }
+
+      function examHasAnyImages() {
+        if (!examPaper || examPaper.length === 0) return false;
+
+        // "시험지에 이미지가 있다"의 기준:
+        // - 실제로 로드된 이미지가 문항(q.image 또는 q.id)과 매칭되어 getImagesForQuestion(q)가 1개 이상 반환되는 경우
+        for (const q of examPaper) {
+          const imgs = getImagesForQuestion(q);
+          if (Array.isArray(imgs) && imgs.length > 0) return true;
+        }
+        return false;
+      }
+function setBtnEnabled(btn, enabled, title) {
+        if (!btn) return;
+        btn.disabled = !enabled;
+        btn.classList.toggle('btn-disabled', !enabled);
+        if (typeof title === 'string') btn.title = title;
+      }
+
+      function updateSaveButtons() {
+        const btnJSON = document.getElementById('btn-save-exam');
+        const btnZIP = document.getElementById('btn-save-exam-zip');
+
+        const hasExam = Array.isArray(examPaper) && examPaper.length > 0;
+        const hasImgs = examHasAnyImages();
+
+        setBtnEnabled(
+          btnJSON,
+          hasExam,
+          hasExam ? '현재 구성된 시험지를 JSON으로 저장합니다.' : '먼저 시험지를 구성하세요.'
+        );
+
+        if (!hasExam) {
+          setBtnEnabled(btnZIP, false, '먼저 시험지를 구성하세요.');
+        } else if (!hasImgs) {
+          setBtnEnabled(btnZIP, false, '시험지에 포함된 이미지가 없습니다. (그림 업로드/파일명 매칭 후 ZIP 저장 가능)');
+        } else {
+          setBtnEnabled(btnZIP, true, '현재 시험지를 (JSON + 포함된 이미지) ZIP으로 저장합니다.');
+        }
+      }
+
+
+      function currentFilteredQuestions() {
+        const kw = document.getElementById('search-box').value.toLowerCase().trim();
+        return questionBank.filter(q => {
+          const t = (q.title || '').toLowerCase();
+          const x = (q.text || '').toLowerCase();
+          const a = (q.answer || '').toLowerCase();
+          return !kw || t.includes(kw) || x.includes(kw) || a.includes(kw);
+        });
+      }
+
+      function sortQuestionArray(arr, key, order) {
+        const dir = order === 'desc' ? -1 : 1;
+        const safeStr = v => (v == null ? '' : String(v));
+        const safeNum = v => (v == null || Number.isNaN(Number(v)) ? 0 : Number(v));
+
+        arr.sort((a, b) => {
+          let va, vb;
+          if (key === 'title') {
+            va = safeStr(a.title).toLowerCase();
+            vb = safeStr(b.title).toLowerCase();
+            return va.localeCompare(vb, undefined, { numeric: true }) * dir;
+          } else if (key === 'id') {
+            va = safeStr(a.id).toLowerCase();
+            vb = safeStr(b.id).toLowerCase();
+            return va.localeCompare(vb, undefined, { numeric: true }) * dir;
+          } else if (key === 'points') {
+            va = safeNum(a.points);
+            vb = safeNum(b.points);
+            return (va - vb) * dir;
+          } else if (key === 'imageCount') {
+            va = getImagesForQuestion(a).length;
+            vb = getImagesForQuestion(b).length;
+            return (va - vb) * dir;
+          }
+          return 0;
+        });
+      }
+
+      function sortQuestionsForRender(list, key, order) {
+        const arr = [...list];
+        sortQuestionArray(arr, key, order);
+        return arr;
+      }
+
+      function renderBank() {
+        const filtered = currentFilteredQuestions();
+        const key = document.getElementById('bank-sort-key').value;
+        const order = document.getElementById('bank-sort-order').value;
+        const sorted = sortQuestionsForRender(filtered, key, order);
+
+        bankList.innerHTML = '';
+        sorted.forEach(q => {
+          const el = document.createElement('div');
+          el.className = "question-card border rounded-lg p-3 bg-white cursor-pointer";
+          el.dataset.id = q.id;
+
+          const previewId = `pv_${cssEscapeId(q.id)}`;
+          const answerId = `ans_${cssEscapeId(q.id)}`;
+          const imgs = getImagesForQuestion(q);
+          const imgURL = imgs[0] || null;
+          const imgCount = imgs.length;
+          const imgBadge = imgCount > 0 ? ` <span class="ml-2 text-xs text-gray-500 align-middle">(이미지 ${imgCount}개)</span>` : '';
+
+          el.innerHTML = `
+            <div class="flex items-center justify-between gap-2">
+              <div class="font-semibold text-gray-800 line-clamp-1">
+                ${escapeHTML(q.title || '')}
+                <span class="ml-2 text-xs text-gray-500 align-middle">${escapeHTML(q.id ?? '')}</span>
+                ${imgBadge}
+              </div>
+            </div>
+            <details class="mt-2 group">
+              <summary class="list-none flex items-center gap-2 text-sm text-sky-700 hover:underline cursor-pointer">
+                <span class="chev transition-transform">▶</span> 미리보기
+              </summary>
+              <div id="${previewId}" class="mt-2 text-sm text-gray-700 space-y-3">
+                <div>${highlightVars(q.text || '')}</div>
+                ${imgURL ? `<div class="border rounded-md p-2 bg-gray-50"><img alt="문항 이미지" src="${imgURL}" class="thumb mx-auto"/></div>` : ''}
+                <div>
+                  <b>정답:</b>
+                  <div id="${answerId}" class="mt-1 overflow-x-auto"></div>
+                </div>
+                <div class="pt-1">
+                  <b>변수 범위:</b>
+                  <div class="mt-1">${formatVariablesFromJson(q)}</div>
+                </div>
+              </div>
+            </details>
+          `;
+          el.addEventListener('click', (evt) => {
+            if (evt.target.closest('summary')) return;
+            el.classList.toggle('selected');
+          });
+          bankList.appendChild(el);
+
+          const pv = el.querySelector(`#${previewId}`);
+          if (window.renderMathInElement && pv) renderMathInElement(pv, KATEX_OPTIONS);
+
+          const ansEl = el.querySelector(`#${answerId}`);
+          safeRenderAnswer(q.answer, ansEl);
+        });
+
+        // Filter-reflected bank stats
+        const totalImagesFiltered = filtered.reduce((s, q) => s + getImagesForQuestion(q).length, 0);
+        bankStatsEl.textContent = `문항: ${filtered.length}개 · 이미지: ${totalImagesFiltered}개`;
+      }
+
+      function addToExam() {
+        const selected = bankList.querySelectorAll('.selected');
+        selected.forEach(el => {
+          const q = questionBank.find(q => String(q.id) === String(el.dataset.id));
+          if (q && !examPaper.find(x => String(x.id) === String(q.id))) {
+            if (q.points == null) q.points = 0;
+            examPaper.push(q);
+          }
+        });
+        renderExam();
+        bankList.querySelectorAll('.selected').forEach(i => i.classList.remove('selected'));
+      }
+
+      function renderExam() {
+        examList.innerHTML = '';
+        examPaper.forEach((q, i) => {
+          const el = document.createElement('div');
+          el.className = "question-card border rounded-lg p-3 bg-white shadow-sm";
+
+          const imgs = getImagesForQuestion(q);
+          const imgURL = imgs[0] || null;
+          const imgCount = imgs.length;
+          const imgBadge = imgCount > 0 ? ` <span class="ml-2 text-xs text-gray-500 align-middle">(이미지 ${imgCount}개)</span>` : '';
+
+          el.innerHTML = `
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="font-semibold">
+                ${i + 1}. ${escapeHTML(q.title || '')}
+                <span class="ml-2 text-xs text-gray-500 align-middle">${escapeHTML(q.id ?? '')}</span>
+                ${imgBadge}
+              </div>
+              <label class="flex items-center gap-2 text-sm">
+                <span class="text-gray-600">배점</span>
+                <input type="number" min="0" step="1" value="${q.points ?? 0}" class="w-20 border rounded px-2 py-1"
+                       oninput="updatePoint(${i}, this.value)">
+              </label>
+            </div>
+            <details class="mt-2 group">
+              <summary class="list-none flex items-center gap-2 text-sm text-sky-700 hover:underline cursor-pointer">
+                <span class="chev transition-transform">▶</span> 미리보기
+              </summary>
+              <div class="mt-2 text-sm text-gray-700 space-y-3">
+                <div>${highlightVars(q.text || '')}</div>
+                ${imgURL ? `<div class="border rounded-md p-2 bg-gray-50"><img alt="문항 이미지" src="${imgURL}" class="thumb mx-auto"/></div>` : ''}
+                <div>
+                  <b>정답:</b>
+                  <div class="mt-1 overflow-x-auto" id="ans_exam_${cssEscapeId(q.id)}"></div>
+                </div>
+                <div class="pt-1">
+                  <b>변수 범위:</b>
+                  <div class="mt-1">${formatVariablesFromJson(q)}</div>
+                </div>
+              </div>
+            </details>
+            <div class="flex gap-2 mt-2">
+              <button class="btn-secondary" onclick="moveQ(${i},-1)">▲</button>
+              <button class="btn-secondary" onclick="moveQ(${i},1)">▼</button>
+              <button class="btn-danger" onclick="removeQ(${i})">삭제</button>
+            </div>`;
+          examList.appendChild(el);
+          if (window.renderMathInElement) renderMathInElement(el, KATEX_OPTIONS);
+          const ansEl = el.querySelector(`#ans_exam_${cssEscapeId(q.id)}`);
+          safeRenderAnswer(q.answer, ansEl);
+        });
+        updateExamStats();
+        updateSaveButtons();
+      }
+
+      window.moveQ = (i, d) => {
+        if (i + d < 0 || i + d >= examPaper.length) return;
+        [examPaper[i], examPaper[i + d]] = [examPaper[i + d], examPaper[i]];
+        renderExam();
+      };
+      window.removeQ = (i) => { examPaper.splice(i, 1); renderExam(); };
+      window.updatePoint = (i, v) => {
+        const num = Number(v);
+        if (!Number.isNaN(num)) {
+          examPaper[i].points = num;
+          updateExamStats();
+        }
+      };
+
+      function updateExamStats() {
+        const count = examPaper.length;
+        const total = examPaper.reduce((s, q) => s + (Number(q.points) || 0), 0);
+        const totalImgs = examPaper.reduce((acc, q) => acc + getImagesForQuestion(q).length, 0);
+        statsEl.textContent = `문항: ${count}개 · 이미지: ${totalImgs}개 · 합계: ${total}점`;
+      }
+
+      function updateStatus(msg) { statusBar.textContent = `상태: ${msg}`; }
+
+      
+      function sanitizeFilename(name) {
+        // 경로 제거 및 위험한 문자 치환
+        let n = String(name || '').split('/').pop().split('\\').pop();
+        n = n.replace(/[\u0000-\u001f\u007f]/g, '');
+        n = n.replace(/[<>:"|?*]/g, '_');
+        n = n.replace(/\s+/g, ' ').trim();
+        if (!n) n = 'image';
+        return n;
+      }
+
+      function extFromMime(mime) {
+        const m = String(mime || '').toLowerCase();
+        if (m.includes('png')) return 'png';
+        if (m.includes('jpeg') || m.includes('jpg')) return 'jpg';
+        if (m.includes('gif')) return 'gif';
+        if (m.includes('webp')) return 'webp';
+        return 'bin';
+      }
+
+      function ensureUniqueName(name, usedSet) {
+        let base = name;
+        let ext = '';
+        const dot = name.lastIndexOf('.');
+        if (dot > 0) {
+          base = name.slice(0, dot);
+          ext = name.slice(dot);
+        }
+        let candidate = name;
+        let i = 2;
+        while (usedSet.has(candidate.toLowerCase())) {
+          candidate = `${base}_${i}${ext}`;
+          i += 1;
+        }
+        usedSet.add(candidate.toLowerCase());
+        return candidate;
+      }
+
+      function downloadBlob(blob, filename) {
+        try {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          a.style.display = 'none';
+          a.rel = 'noopener';
+          document.body.appendChild(a);
+
+          const evt = new MouseEvent('click', { view: window, bubbles: true, cancelable: true });
+          a.dispatchEvent(evt);
+
+          setTimeout(() => {
+            try { URL.revokeObjectURL(url); } catch (e) {}
+            try { a.remove(); } catch (e) {}
+          }, 1500);
+        } catch (e) {
+          console.error('downloadBlob 실패:', e);
+          alert('파일 저장 중 오류가 발생했습니다. (콘솔 참고)');
+        }
+      }
+
+      async function downloadExamZip() {
+        if (!examPaper.length) {
+          console.warn('ZIP 저장 실패: examPaper 비어 있음');
+          return alert('저장할 시험지 구성이 없습니다.');
+        }
+        if (typeof JSZip === 'undefined') {
+          updateStatus('오류: JSZip 로드 실패');
+          return alert('ZIP 생성을 위한 JSZip 라이브러리를 불러오지 못했습니다. (오프라인/차단 여부 확인)');
+        }
+
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const zipName = `exam_package_${ts}.zip`;
+
+        updateStatus('ZIP 생성 중…');
+
+        const zip = new JSZip();
+
+        // 1) 시험지 JSON
+        zip.file(`exam_paper_${ts}.json`, JSON.stringify({ questions: examPaper }, null, 2));
+
+        // 2) 시험지에 포함된 이미지들만 수집
+        const usedUrls = new Set();
+        examPaper.forEach(q => {
+          const urls = getImagesForQuestion(q);
+          urls.forEach(u => usedUrls.add(u));
+        });
+
+        const imgFolder = zip.folder('images');
+        const usedNames = new Set();
+
+        let added = 0;
+        for (const url of usedUrls) {
+          const meta = imageURLMeta.get(url);
+          const blob = meta?.blob;
+          if (!blob) continue;
+
+          // 파일명 우선순위: meta.name(원본 파일명) -> image_{n}.png/jpg
+          let name = meta?.name ? String(meta.name) : `image_${added + 1}`;
+
+          // 확장자 없으면 blob mime type으로 보정
+          if (!/\.[A-Za-z0-9]+$/.test(name)) {
+            const t = String(blob.type || '').toLowerCase();
+            if (t.includes('png')) name += '.png';
+            else if (t.includes('jpeg') || t.includes('jpg')) name += '.jpg';
+          }
+
+          name = sanitizeFilename(name);
+          name = ensureUniqueName(name, usedNames);
+
+          try {
+            imgFolder.file(name, blob);
+            added += 1;
+          } catch (e) {
+            console.warn('ZIP에 이미지 추가 실패:', name, e);
+          }
+        }
+
+        try {
+          const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+          downloadBlob(blob, zipName);
+          updateStatus(`${zipName} 저장 완료 (이미지 ${added}개 포함)`);
+        } catch (e) {
+          console.error('ZIP 생성 실패:', e);
+          updateStatus('오류: ZIP 생성 실패');
+          alert('ZIP 생성에 실패했습니다. (콘솔 참고)');
+        }
+      }
+
+function downloadJSON(obj, filename) {
+        try {
+          const json = JSON.stringify(obj, null, 2);
+          const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => {
+            URL.revokeObjectURL(url);
+            a.remove();
+          }, 0);
+          updateStatus(`${filename} 저장 완료`);
+        } catch (e) {
+          console.error('downloadJSON 실패:', e);
+          alert('저장 중 오류가 발생했습니다. (콘솔 참고)');
+        }
+      }
+
+      function escapeHTML(s) {
+        return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+      }
+
+      function cssEscapeId(s) {
+        return String(s).replace(/[^a-zA-Z0-9_-]/g, '_');
+      }
+
+      function highlightVars(html) {
+        return String(html).replace(/\*([^\*\s][^*]*?)\*/g, (m, p1) => `{\\color{blue}\\mathbf{${p1}}}`);
+      }
+
+      function formatVariablesFromJson(q) {
+        const vars = Array.isArray(q.variables) ? q.variables : null;
+        if (!vars || !vars.length) return `<span class="text-gray-400">없음</span>`;
+        return vars.map(v => {
+          const name = escapeHTML(v.name ?? '');
+          const min = v.min;
+          const max = v.max;
+          const body = (min != null || max != null) ? ` (${min ?? '…'} ~ ${max ?? '…'})` : '';
+          return `<span class="chip">${name}${body}</span>`;
+        }).join(' ');
+      }
+
+      function safeRenderAnswer(answer, el) {
+        if (!el) return;
+        try {
+          let tex = String(answer || '').trim();
+          if (tex.startsWith('$$') && tex.endsWith('$$')) {
+            tex = tex.slice(2, -2).trim();
+          } else if (tex.startsWith('\\[') && tex.endsWith('\\]')) {
+            tex = tex.slice(2, -2).trim();
+          }
+          if (window.katex && el) {
+            katex.render(tex, el, { displayMode: true, throwOnError: false });
+          } else {
+            el.textContent = tex;
+          }
+        } catch (e) {
+          el.textContent = String(answer || '');
+        }
+      }
+
+      updateStatus("문제 JSON과 이미지 파일을 불러오세요.");
+    });
+  </script>
+</body>
+</html>
