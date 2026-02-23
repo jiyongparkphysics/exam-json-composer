@@ -5,17 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>시험지 JSON 구성기 ver. 260111</title>
 
-  <!-- Tailwind CSS -->
+  <!-- Tailwind CSS (dev-only CDN; does not support SRI due to dynamic output) -->
   <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- JSZip (ZIP 입력 지원) -->
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"
+          integrity="sha512-XMVd28F1oH/O71fzwBnV7HucLxVwtxf26XV8P4wPk26EDxuGZ91N8bsOttmnomcCD3CS5ZMRL50H0GgOHvegtg=="
+          crossorigin="anonymous"></script>
 
   <!-- KaTeX -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css"
+        integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV"
+        crossorigin="anonymous">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"
+          integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8"
+          crossorigin="anonymous"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+          integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05"
+          crossorigin="anonymous"></script>
 
   <style>
     .question-card { transition: all 0.2s ease-in-out; }
@@ -53,7 +60,7 @@
         title="문제 JSON과 이미지 파일을 선택하세요."
       />
       <label class="flex items-center gap-2 text-xs text-gray-700">
-        <input id="toggle-accum" type="checkbox" checked class="accent-sky-600">
+        <input id="toggle-accum" type="checkbox" checked class="accent-sky-600" aria-label="업로드 시 기존 데이터에 누적">
         업로드 시 누적
       </label>
       <button id="btn-save-exam" class="btn-primary ml-2 btn-bar" title="현재 구성된 시험지를 JSON으로 저장합니다.">JSON 저장</button>
@@ -86,7 +93,7 @@
         </div>
         <button id="btn-select-all" class="btn-secondary">모두 선택</button>
         <button id="btn-deselect-all" class="btn-secondary">선택 해제</button>
-        <button id="btn-add-to-exam" class="btn-primary">선택 추가 →</button>
+        <button id="btn-add-to-exam" class="btn-primary" aria-label="선택한 문항을 시험지에 추가">선택 추가 →</button>
       </div>
 
       <div id="question-bank-list" class="space-y-2"></div>
@@ -255,6 +262,14 @@
                   const base = (name || '').replace(/\.[^.]+$/, '');
                   const key = base.toLowerCase();
                   try {
+                    // Fix #8: In accumulation mode, revoke old URLs for the same key
+                    if (doAccum && imageMap.has(key)) {
+                      imageMap.get(key).forEach(oldUrl => {
+                        try { URL.revokeObjectURL(oldUrl); } catch(e) {}
+                        imageURLMeta.delete(oldUrl);
+                      });
+                      imageMap.delete(key);
+                    }
                     const url = URL.createObjectURL(blob);
                     if (!imageMap.has(key)) imageMap.set(key, []);
                     imageMap.get(key).push(url);
@@ -304,6 +319,14 @@
           const base = (f.name || '').replace(/\.[^.]+$/, '');
           const key = base.toLowerCase();
           try {
+            // Fix #8: In accumulation mode, revoke old URLs for the same key to prevent memory leak
+            if (doAccum && imageMap.has(key)) {
+              imageMap.get(key).forEach(oldUrl => {
+                try { URL.revokeObjectURL(oldUrl); } catch(e) {}
+                imageURLMeta.delete(oldUrl);
+              });
+              imageMap.delete(key);
+            }
             const url = URL.createObjectURL(f);
             if (!imageMap.has(key)) imageMap.set(key, []);
             imageMap.get(key).push(url);
@@ -315,9 +338,36 @@
           }
         });
 
-        updateStatus(`${jsonCount}개 JSON, ${imgCount}개 이미지 로드 · 총 ${questionsLoaded}문항 ${doAccum ? '(누적)' : '(초기화 후 로드)'}`);
+        // Fix #9: Validate question schema — filter out entries missing required fields
+        const beforeCount = questionBank.length;
+        questionBank = questionBank.filter(q => q && q.id != null && typeof q.id !== 'undefined');
+        const invalidCount = beforeCount - questionBank.length;
+        if (invalidCount > 0) {
+          console.warn(`${invalidCount}개 문항이 필수 필드(id)가 없어 제외됨`);
+        }
+
+        // Fix #6: Detect duplicate IDs and warn
+        const idCounts = new Map();
+        questionBank.forEach(q => {
+          const key = String(q.id);
+          idCounts.set(key, (idCounts.get(key) || 0) + 1);
+        });
+        const dupes = [...idCounts.entries()].filter(([, c]) => c > 1);
+        if (dupes.length > 0) {
+          const dupeList = dupes.map(([id, c]) => `${id}(${c}개)`).join(', ');
+          console.warn('중복 ID 발견:', dupeList);
+          updateStatus(`${jsonCount}개 JSON, ${imgCount}개 이미지 로드 · 총 ${questionsLoaded}문항 · ⚠ 중복 ID: ${dupeList}`);
+        } else {
+          updateStatus(`${jsonCount}개 JSON, ${imgCount}개 이미지 로드 · 총 ${questionsLoaded}문항 ${doAccum ? '(누적)' : '(초기화 후 로드)'}`);
+        }
+
         renderBank();
         renderExam();
+
+        // Fix #4: Try to restore exam composition from session if exam is empty
+        if (examPaper.length === 0 && questionBank.length > 0) {
+          restoreExamFromSession();
+        }
       }
 
       function getImagesForQuestion(q) {
@@ -449,7 +499,7 @@ function setBtnEnabled(btn, enabled, title) {
                 <span class="chev transition-transform">▶</span> 미리보기
               </summary>
               <div id="${previewId}" class="mt-2 text-sm text-gray-700 space-y-3">
-                <div>${highlightVars(q.text || '')}</div>
+                <div>${highlightVars(escapeHTML(q.text || ''))}</div>
                 ${imgURL ? `<div class="border rounded-md p-2 bg-gray-50"><img alt="문항 이미지" src="${imgURL}" class="thumb mx-auto"/></div>` : ''}
                 <div>
                   <b>정답:</b>
@@ -485,8 +535,9 @@ function setBtnEnabled(btn, enabled, title) {
         selected.forEach(el => {
           const q = questionBank.find(q => String(q.id) === String(el.dataset.id));
           if (q && !examPaper.find(x => String(x.id) === String(q.id))) {
-            if (q.points == null) q.points = 0;
-            examPaper.push(q);
+            // Fix #13: Clone to avoid mutating the original question bank object
+            const clone = { ...q, points: q.points ?? 0 };
+            examPaper.push(clone);
           }
         });
         renderExam();
@@ -513,8 +564,7 @@ function setBtnEnabled(btn, enabled, title) {
               </div>
               <label class="flex items-center gap-2 text-sm">
                 <span class="text-gray-600">배점</span>
-                <input type="number" min="0" step="1" value="${q.points ?? 0}" class="w-20 border rounded px-2 py-1"
-                       oninput="updatePoint(${i}, this.value)">
+                <input type="number" min="0" step="1" value="${q.points ?? 0}" class="w-20 border rounded px-2 py-1 js-point-input">
               </label>
             </div>
             <details class="mt-2 group">
@@ -522,7 +572,7 @@ function setBtnEnabled(btn, enabled, title) {
                 <span class="chev transition-transform">▶</span> 미리보기
               </summary>
               <div class="mt-2 text-sm text-gray-700 space-y-3">
-                <div>${highlightVars(q.text || '')}</div>
+                <div>${highlightVars(escapeHTML(q.text || ''))}</div>
                 ${imgURL ? `<div class="border rounded-md p-2 bg-gray-50"><img alt="문항 이미지" src="${imgURL}" class="thumb mx-auto"/></div>` : ''}
                 <div>
                   <b>정답:</b>
@@ -535,10 +585,14 @@ function setBtnEnabled(btn, enabled, title) {
               </div>
             </details>
             <div class="flex gap-2 mt-2">
-              <button class="btn-secondary" onclick="moveQ(${i},-1)">▲</button>
-              <button class="btn-secondary" onclick="moveQ(${i},1)">▼</button>
-              <button class="btn-danger" onclick="removeQ(${i})">삭제</button>
+              <button class="btn-secondary js-move-up" aria-label="위로 이동">▲</button>
+              <button class="btn-secondary js-move-down" aria-label="아래로 이동">▼</button>
+              <button class="btn-danger js-remove" aria-label="삭제">삭제</button>
             </div>`;
+          el.querySelector('.js-point-input').addEventListener('input', (evt) => updatePoint(i, evt.target.value));
+          el.querySelector('.js-move-up').addEventListener('click', () => moveQ(i, -1));
+          el.querySelector('.js-move-down').addEventListener('click', () => moveQ(i, 1));
+          el.querySelector('.js-remove').addEventListener('click', () => removeQ(i));
           examList.appendChild(el);
           if (window.renderMathInElement) renderMathInElement(el, KATEX_OPTIONS);
           const ansEl = el.querySelector(`#ans_exam_${cssEscapeId(q.id)}`);
@@ -548,19 +602,19 @@ function setBtnEnabled(btn, enabled, title) {
         updateSaveButtons();
       }
 
-      window.moveQ = (i, d) => {
+      function moveQ(i, d) {
         if (i + d < 0 || i + d >= examPaper.length) return;
         [examPaper[i], examPaper[i + d]] = [examPaper[i + d], examPaper[i]];
         renderExam();
-      };
-      window.removeQ = (i) => { examPaper.splice(i, 1); renderExam(); };
-      window.updatePoint = (i, v) => {
+      }
+      function removeQ(i) { examPaper.splice(i, 1); renderExam(); }
+      function updatePoint(i, v) {
         const num = Number(v);
         if (!Number.isNaN(num)) {
           examPaper[i].points = num;
           updateExamStats();
         }
-      };
+      }
 
       function updateExamStats() {
         const count = examPaper.length;
@@ -713,7 +767,7 @@ function downloadJSON(obj, filename) {
           setTimeout(() => {
             URL.revokeObjectURL(url);
             a.remove();
-          }, 0);
+          }, 200);
           updateStatus(`${filename} 저장 완료`);
         } catch (e) {
           console.error('downloadJSON 실패:', e);
@@ -722,11 +776,23 @@ function downloadJSON(obj, filename) {
       }
 
       function escapeHTML(s) {
-        return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+        return String(s)
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
       }
 
       function cssEscapeId(s) {
-        return String(s).replace(/[^a-zA-Z0-9_-]/g, '_');
+        // Sanitize for HTML id attributes; append hash to avoid collisions
+        // (e.g., PHY.01 and PHY_01 both mapping to PHY_01)
+        const base = String(s).replace(/[^a-zA-Z0-9_-]/g, '_');
+        // Simple hash to differentiate originally-different IDs
+        let h = 0;
+        const str = String(s);
+        for (let i = 0; i < str.length; i++) h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+        return base + '_' + (h >>> 0).toString(36);
       }
 
       function highlightVars(html) {
@@ -740,7 +806,7 @@ function downloadJSON(obj, filename) {
           const name = escapeHTML(v.name ?? '');
           const min = v.min;
           const max = v.max;
-          const body = (min != null || max != null) ? ` (${min ?? '…'} ~ ${max ?? '…'})` : '';
+          const body = (min != null || max != null) ? ` (${escapeHTML(String(min ?? '…'))} ~ ${escapeHTML(String(max ?? '…'))})` : '';
           return `<span class="chip">${name}${body}</span>`;
         }).join(' ');
       }
@@ -763,6 +829,45 @@ function downloadJSON(obj, filename) {
           el.textContent = String(answer || '');
         }
       }
+
+      // Fix #4: Auto-save exam paper composition to sessionStorage
+      const STORAGE_KEY = 'exam_composer_autosave';
+
+      function saveExamToSession() {
+        try {
+          const data = examPaper.map(q => ({ id: q.id, points: q.points }));
+          sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        } catch (e) { /* sessionStorage may be unavailable */ }
+      }
+
+      function restoreExamFromSession() {
+        try {
+          const raw = sessionStorage.getItem(STORAGE_KEY);
+          if (!raw) return;
+          const saved = JSON.parse(raw);
+          if (!Array.isArray(saved) || saved.length === 0) return;
+          if (questionBank.length === 0) return; // no bank to restore from
+
+          saved.forEach(item => {
+            const q = questionBank.find(q => String(q.id) === String(item.id));
+            if (q && !examPaper.find(x => String(x.id) === String(q.id))) {
+              const clone = { ...q, points: item.points ?? q.points ?? 0 };
+              examPaper.push(clone);
+            }
+          });
+          if (examPaper.length > 0) {
+            renderExam();
+            updateStatus(`${examPaper.length}개 문항이 이전 세션에서 복원됨`);
+          }
+        } catch (e) { /* ignore parse errors */ }
+      }
+
+      // Hook auto-save into exam-modifying functions
+      const origRenderExam = renderExam;
+      renderExam = function() {
+        origRenderExam();
+        saveExamToSession();
+      };
 
       updateStatus("문제 JSON과 이미지 파일을 불러오세요.");
     });
