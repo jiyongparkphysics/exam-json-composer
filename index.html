@@ -44,6 +44,17 @@
     .thumb { max-height: 220px; object-fit: contain; }
     .ctrl { border: 1px solid #e2e8f0; border-radius: 6px; padding: 2px 8px; font-size: 12px; background: #fff; }
       .btn-disabled, button:disabled { opacity:0.45; cursor:not-allowed; }
+      .dupe-badge { display:inline-block; background:#fef2f2; color:#991b1b; border:1px solid #fca5a5; border-radius:999px; padding:1px 8px; font-size:12px; cursor:pointer; margin-left:6px; }
+      .dupe-badge:hover { background:#fee2e2; }
+      .dupe-modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.4); display:flex; align-items:center; justify-content:center; z-index:100; }
+      .dupe-modal { background:#fff; border-radius:12px; padding:20px 24px; max-width:480px; width:90%; max-height:60vh; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.2); }
+      .dupe-modal h3 { margin:0 0 12px; font-size:15px; color:#991b1b; }
+      .dupe-modal-list { overflow-y:auto; flex:1; font-size:13px; }
+      .dupe-modal-list table { width:100%; border-collapse:collapse; }
+      .dupe-modal-list th, .dupe-modal-list td { text-align:left; padding:4px 8px; border-bottom:1px solid #f1f5f9; }
+      .dupe-modal-list th { position:sticky; top:0; background:#fff; font-weight:600; color:#64748b; font-size:12px; }
+      .dupe-modal-close { margin-top:12px; align-self:flex-end; background:#e2e8f0; border:none; border-radius:6px; padding:6px 16px; cursor:pointer; font-size:13px; }
+      .dupe-modal-close:hover { background:#cbd5e1; }
   </style>
 </head>
 <body class="bg-gray-50 flex flex-col min-h-screen">
@@ -354,9 +365,8 @@
         });
         const dupes = [...idCounts.entries()].filter(([, c]) => c > 1);
         if (dupes.length > 0) {
-          const dupeList = dupes.map(([id, c]) => `${id}(${c}개)`).join(', ');
-          console.warn('중복 ID 발견:', dupeList);
-          updateStatus(`${jsonCount}개 JSON, ${imgCount}개 이미지 로드 · 총 ${questionsLoaded}문항 · ⚠ 중복 ID: ${dupeList}`);
+          console.warn('중복 ID 발견:', dupes.map(([id, c]) => `${id}(${c}개)`).join(', '));
+          updateStatus(`${jsonCount}개 JSON, ${imgCount}개 이미지 로드 · 총 ${questionsLoaded}문항`, dupes);
         } else {
           updateStatus(`${jsonCount}개 JSON, ${imgCount}개 이미지 로드 · 총 ${questionsLoaded}문항 ${doAccum ? '(누적)' : '(초기화 후 로드)'}`);
         }
@@ -623,7 +633,54 @@ function setBtnEnabled(btn, enabled, title) {
         statsEl.textContent = `문항: ${count}개 · 이미지: ${totalImgs}개 · 합계: ${total}점`;
       }
 
-      function updateStatus(msg) { statusBar.textContent = `상태: ${msg}`; }
+      let _lastDupes = [];
+      function updateStatus(msg, dupes) {
+        // Remove any previous dupe badge
+        const oldBadge = statusBar.parentNode.querySelector('.dupe-badge');
+        if (oldBadge) oldBadge.remove();
+
+        statusBar.textContent = `상태: ${msg}`;
+
+        if (dupes && dupes.length > 0) {
+          _lastDupes = dupes;
+          const badge = document.createElement('span');
+          badge.className = 'dupe-badge';
+          badge.textContent = `⚠ 중복 ID ${dupes.length}종`;
+          badge.title = '클릭하여 상세 보기';
+          badge.onclick = showDupeModal;
+          statusBar.parentNode.appendChild(badge);
+        } else {
+          _lastDupes = [];
+        }
+      }
+
+      function showDupeModal() {
+        // Remove existing modal if any
+        const existing = document.getElementById('dupe-modal-overlay');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'dupe-modal-overlay';
+        overlay.className = 'dupe-modal-overlay';
+        overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+        const rows = _lastDupes.map(([id, c]) =>
+          `<tr><td style="font-family:monospace">${id}</td><td>${c}개</td></tr>`
+        ).join('');
+
+        overlay.innerHTML = `
+          <div class="dupe-modal">
+            <h3>⚠ 중복 ID 목록 (${_lastDupes.length}종)</h3>
+            <div class="dupe-modal-list">
+              <table>
+                <thead><tr><th>문항 ID</th><th>개수</th></tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+            <button class="dupe-modal-close" onclick="this.closest('.dupe-modal-overlay').remove()">닫기</button>
+          </div>`;
+        document.body.appendChild(overlay);
+      }
 
       
       function sanitizeFilename(name) {
